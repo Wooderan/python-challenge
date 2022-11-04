@@ -5,6 +5,9 @@ import re
 
 import requests
 import aiohttp
+import aiofiles
+import aiocsv
+from aiocsv import AsyncWriter
 
 from bs4 import BeautifulSoup
 from random import randint
@@ -24,7 +27,8 @@ headers = {
     'referer': 'https://jobs.dou.ua/companies/',
 }
 
-companies_data = []
+# We don't need this now
+# companies_data = []
 
 async def decode_email(e):
     de = ""
@@ -52,7 +56,14 @@ async def normalize_data(data, emails, phones):
     return data
 
 
-async def load_data(session, url, name):
+# New asynchronous function to save data
+async def save_data(writer, data):
+    await writer.writerows([
+        data.keys(),
+        data.values()
+    ])
+
+async def load_data(session, writer, url, name):
     async with session.get(url, headers=headers) as company_profile:
         if company_profile.status == 404:
             return
@@ -87,44 +98,50 @@ async def load_data(session, url, name):
             }
             result = await normalize_data(data, emails_company, phones_company)
             print(result)
-            companies_data.append(result)
+            # companies_data.append(result)
+            # Instead asynchronous call to save data
+            await save_data(writer, result)
 
 async def main():
+    q = asyncio.Queue()
     flag = True
     tick = 0
     num = 0
     async with aiohttp.ClientSession() as session:
-        async with session.get(main_page, headers=headers) as resp:
-            soup = BeautifulSoup(await resp.text(), 'html.parser')
-            token = soup.find('input', attrs={'name':'csrfmiddlewaretoken'})['value']
-        while flag:
-            tasks = []
-            print(f'num of page {num}')
-            num += 1
-            data = {
-                'csrfmiddlewaretoken': token,
-                'count': tick
-            }
-            tick += 20
-            sleep(randint(3,7))
-            async with session.post(companies_list, headers=headers, data=data) as res_comp:
-                data = await res_comp.json()
-                flag = not data['last']
-                html = data['html']
-                soup_companis = BeautifulSoup(html, 'html.parser')
-                companies = soup_companis.find_all(class_='company')
-                for company in companies:
-                    url_company = company.find(class_='cn-a').get('href')
-                    name = company.find(class_='cn-a').text
-                    task = asyncio.create_task(load_data(session, url_company, name))
-                    tasks.append(task)
-                await asyncio.gather(*tasks)
-                await asyncio.sleep(1)
+        async with aiofiles.open(f'dou.csv', 'w') as f:
+            writer = AsyncWriter(f)
+            async with session.get(main_page, headers=headers) as resp:
+                soup = BeautifulSoup(await resp.text(), 'html.parser')
+                token = soup.find('input', attrs={'name':'csrfmiddlewaretoken'})['value']
+            while flag:
+                tasks = []
+                print(f'num of page {num}')
+                num += 1
+                data = {
+                    'csrfmiddlewaretoken': token,
+                    'count': tick
+                }
+                tick += 20
+                sleep(randint(3,7))
+                async with session.post(companies_list, headers=headers, data=data) as res_comp:
+                    data = await res_comp.json()
+                    flag = not data['last']
+                    flag = False # REMOVE THIS
+                    html = data['html']
+                    soup_companis = BeautifulSoup(html, 'html.parser')
+                    companies = soup_companis.find_all(class_='company')
+                    for company in companies:
+                        url_company = company.find(class_='cn-a').get('href')
+                        name = company.find(class_='cn-a').text
+                        task = asyncio.create_task(load_data(session, writer, url_company, name))
+                        tasks.append(task)
+                    await asyncio.gather(*tasks)
+                    await asyncio.sleep(1)
 
 asyncio.run(main())
 
-with open(f'dou.csv', 'w') as f:
-        writer = csv.writer(f)
-        for company in companies_data:
-            writer.writerow(company.keys())
-            writer.writerow(company.values())
+# with open(f'dou.csv', 'w') as f:
+#         writer = csv.writer(f)
+#         for company in companies_data:
+#             writer.writerow(company.keys())
+#             writer.writerow(company.values())
